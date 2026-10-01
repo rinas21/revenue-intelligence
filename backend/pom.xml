@@ -11,23 +11,13 @@
 	<groupId>com.rinas</groupId>
 	<artifactId>revenue-intelligence</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name/>
-	<description/>
-	<url/>
-	<licenses>
-		<license/>
-	</licenses>
-	<developers>
-		<developer/>
-	</developers>
-	<scm>
-		<connection/>
-		<developerConnection/>
-		<tag/>
-		<url/>
-	</scm>
+	<name>revenue-intelligence</name>
+	<description>Small Business Revenue Intelligence Platform - backend</description>
+
 	<properties>
 		<java.version>21</java.version>
+		<!-- springdoc 3.x is the line that supports Spring Boot 4 / Spring Framework 7. -->
+		<springdoc.version>3.1.1</springdoc.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -54,6 +44,32 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
+
+		<!--
+			Phase 1 infrastructure only: establishes the connection to the broker
+			and lets Actuator report broker health. No producer or consumer is
+			wired up until the transactional order flow is correct (Phase 3/4).
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka</artifactId>
+		</dependency>
+
+		<!--
+			Phase 1 infrastructure only. Nothing is cached until the dashboard
+			queries justify it (Phase 9).
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.version}</version>
+		</dependency>
+
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>

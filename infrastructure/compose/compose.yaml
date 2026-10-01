@@ -1,0 +1,105 @@
+# ---------------------------------------------------------------------------
+# Local development infrastructure — Podman Compose
+#
+# Scope of this file (Phase 1 "Foundation"):
+#   postgres : source of truth (OLTP). Also hosts the analytics schema.
+#   kafka    : event backbone, single-node KRaft. Wired in the application but
+#              no producer/consumer exists yet (that is Phase 3 / Phase 4).
+#   redis    : cache. Wired in the application but not used yet (Phase 9).
+#
+# Airflow and Spark get their own compose files in the phases that introduce
+# them, so that a normal development session does not boot the whole platform.
+#
+# Usage (from the repository root):
+#   cp .env.example .env
+#   podman compose -f infrastructure/compose/compose.yaml up -d
+#   podman compose -f infrastructure/compose/compose.yaml ps
+#   podman compose -f infrastructure/compose/compose.yaml down          # keep data
+#   podman compose -f infrastructure/compose/compose.yaml down -v       # wipe data
+#
+# Individual services can be started on their own, e.g. `up -d postgres`.
+#
+# Every value below has an inline default so the stack also boots without a
+# `.env` file present. Real deployments must supply real values.
+# ---------------------------------------------------------------------------
+
+name: revenue-intelligence
+
+services:
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    container_name: revenue-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-revenue_intelligence}
+      POSTGRES_USER: ${POSTGRES_USER:-revenue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-revenue_local_dev}
+      # Deterministic collation so index ordering does not drift per host.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-revenue} -d ${POSTGRES_DB:-revenue_intelligence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: docker.io/library/redis:8-alpine
+    container_name: revenue-redis
+    restart: unless-stopped
+    # Cache only: never a source of truth, so persistence is disabled on
+    # purpose. A cache that must survive a restart is a sign it is a database.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  kafka:
+    image: docker.io/apache/kafka:4.3.1
+    container_name: revenue-kafka
+    restart: unless-stopped
+    environment:
+      # Single-node KRaft: this node is both broker and controller.
+      # No ZooKeeper. Not for production — a real deployment needs >= 3
+      # controllers and replication factor 3 on the internal topics.
+      CLUSTER_ID: w5ogAhB4Q-qK0TsMkH5a-w
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      # Advertised as localhost: the only client of this broker is the
+      # application running on the developer machine.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:${KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Single node => replication factor 1 everywhere, otherwise the broker
+      # cannot create its own internal topics and never becomes ready.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres-data:
+  kafka-data:

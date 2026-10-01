@@ -1,3 +1,123 @@
 spring:
   application:
     name: revenue-intelligence
+
+  autoconfigure:
+    exclude:
+      # There is no user store in Phase 1. Without this exclusion Spring Boot
+      # creates a random in-memory user and prints its password to the log,
+      # which is exactly the ambiguous default SecurityConfig is written to
+      # avoid. Remove this exclusion in Phase 14, when real users exist.
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+
+  # --- PostgreSQL: transactional source of truth ----------------------------
+  # Every setting is overridable by environment variable. The defaults match
+  # infrastructure/compose/compose.yaml so the stack boots with no .env file.
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:revenue_intelligence}
+    username: ${POSTGRES_USER:revenue}
+    password: ${POSTGRES_PASSWORD:revenue_local_dev}
+    hikari:
+      pool-name: revenue-cp
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:10}
+
+  # --- Flyway owns the schema ----------------------------------------------
+  # Two schemas: `app` for transactional domain data, `analytics` for anything
+  # produced by dbt. Flyway's own history table lives in `app`.
+  flyway:
+    enabled: true
+    default-schema: app
+    schemas:
+      - app
+      - analytics
+    locations: classpath:db/migration
+
+  # --- Hibernate ------------------------------------------------------------
+  # ddl-auto=validate: the database schema is defined by Flyway, never by
+  # Hibernate. A mismatch fails startup, which is the point.
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: app
+        jdbc:
+          time_zone: UTC
+
+  data:
+    # --- Redis: cache only, not a source of truth --------------------------
+    # Nothing is cached yet (Phase 9). Configured so the connection and health
+    # indicator are exercised now rather than in the phase that needs them.
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 2s
+      timeout: 2s
+
+  # --- Kafka: event backbone ----------------------------------------------
+  # Broker is configured; no producer or consumer exists yet. Serializers,
+  # consumer groups per use case, retry and dead-letter handling are
+  # deliberately deferred to Phase 4, where real event types exist to
+  # configure them against. See docs/decisions/0003-kafka-role.md.
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    admin:
+      # A broker outage must not prevent the application from starting. Domain
+      # events are published inside a database transaction, so broker health is
+      # reported through the health endpoint rather than enforced at boot.
+      fail-fast: false
+    consumer:
+      group-id: ${KAFKA_CONSUMER_GROUP:revenue-intelligence}
+      auto-offset-reset: earliest
+
+  jackson:
+    default-property-inclusion: non_null
+    # Jackson 3 (Spring Boot 4) moved WRITE_DATES_AS_TIMESTAMPS out of
+    # SerializationFeature and into DateTimeFeature, so the property moved with
+    # it. Declared explicitly rather than left to the default so the wire format
+    # for timestamps is a decision on record, not an accident of a version.
+    datatype:
+      datetime:
+        write-dates-as-timestamps: false
+
+server:
+  port: ${BACKEND_PORT:8080}
+  error:
+    # Error bodies are produced by GlobalExceptionHandler. Spring's own error
+    # page would bypass it, so it is never rendered.
+    whitelabel:
+      enabled: false
+
+# --- OpenAPI / Swagger UI ---------------------------------------------------
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+
+# --- Actuator ---------------------------------------------------------------
+# Intentionally no Prometheus/Grafana in this project. Actuator is used for
+# health, not for metrics scraping.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # Dev convenience. MUST become `when-authorized` once authentication
+      # lands in Phase 14, otherwise component health is public.
+      show-details: always
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: Small Business Revenue Intelligence Platform
+    phase: "1 - Foundation"
