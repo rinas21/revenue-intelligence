@@ -2,13 +2,9 @@ spring:
   application:
     name: revenue-intelligence
 
-  autoconfigure:
-    exclude:
-      # There is no user store in Phase 1. Without this exclusion Spring Boot
-      # creates a random in-memory user and prints its password to the log,
-      # which is exactly the ambiguous default SecurityConfig is written to
-      # avoid. Remove this exclusion in Phase 14, when real users exist.
-      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+  # A real UserDetailsService exists (CustomUserDetailsService), so Spring Boot's
+  # in-memory user auto-configuration backs off on its own. The Phase 1 exclusion
+  # is therefore no longer needed and is removed.
 
   # --- PostgreSQL: transactional source of truth ----------------------------
   # Every setting is overridable by environment variable. The defaults match
@@ -97,6 +93,20 @@ springdoc:
     path: /swagger-ui.html
     operations-sorter: method
     tags-sorter: alpha
+
+# --- Security ---------------------------------------------------------------
+# The signing secret MUST be overridden by the environment in any deployment.
+# The default here is intentionally a well-known local value and is not a
+# credential: it only signs tokens for a developer's own machine.
+security:
+  jwt:
+    secret: ${RI_JWT_SECRET:local-development-secret-change-me-please-32}
+    access-token-ttl: ${RI_JWT_ACCESS_TTL:PT30M}
+    refresh-token-ttl: ${RI_JWT_REFRESH_TTL:P7D}
+  rate-limit:
+    # Requests per window per client, applied to the analytics and auth surfaces.
+    capacity: ${RI_RATE_LIMIT_CAPACITY:120}
+    window: ${RI_RATE_LIMIT_WINDOW:PT1M}
 
 # --- Actuator ---------------------------------------------------------------
 # Intentionally no Prometheus/Grafana in this project. Actuator is used for

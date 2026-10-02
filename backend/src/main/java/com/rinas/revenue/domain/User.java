@@ -1,11 +1,25 @@
 package com.rinas.revenue.domain;
 
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
+/**
+ * An authenticated member of exactly one business. Passwords are stored only as
+ * a BCrypt hash; the plaintext never reaches the database or a DTO.
+ */
 @Entity
-@Table(schema = "app")
+@Table(schema = "app", name = "users")
 public class User {
 
     @Id
@@ -18,46 +32,39 @@ public class User {
     @Column(nullable = false, length = 255, unique = true)
     private String email;
 
-    @Column(nullable = false, length = 255)
+    @Column(name = "password_hash", nullable = false, length = 255)
     private String passwordHash;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String role; // OWNER, ADMIN, STAFF
+    private Role role;
 
-    @Column(nullable = false, columnDefinition = "UUID")
-    private UUID businessId;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "business_id", nullable = false)
+    private Business business;
 
-    @Column(nullable = false)
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Column(nullable = false)
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    // Default constructor for JPA
-    public User() {
-        this.id = UUID.randomUUID();
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
-        this.role = "STAFF";
+    protected User() {
     }
 
-    public User(String username, String email, String passwordHash, UUID businessId, String role) {
+    public User(String username, String email, String passwordHash, Business business, Role role) {
         this.id = UUID.randomUUID();
         this.username = username;
         this.email = email;
         this.passwordHash = passwordHash;
-        this.businessId = businessId;
-        this.role = role != null ? role : "STAFF";
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
+        this.business = business;
+        this.role = role == null ? Role.STAFF : role;
     }
 
     public UUID getId() {
         return id;
-    }
-
-    public void setId(UUID id) {
-        this.id = id;
     }
 
     public String getUsername() {
@@ -84,35 +91,31 @@ public class User {
         this.passwordHash = passwordHash;
     }
 
-    public String getRole() {
+    public Role getRole() {
         return role;
     }
 
-    public void setRole(String role) {
+    public void setRole(Role role) {
         this.role = role;
     }
 
-    public UUID getBusinessId() {
-        return businessId;
+    public Business getBusiness() {
+        return business;
     }
 
-    public void setBusinessId(UUID businessId) {
-        this.businessId = businessId;
+    public void setBusiness(Business business) {
+        this.business = business;
+    }
+
+    public UUID getBusinessId() {
+        return business == null ? null : business.getId();
     }
 
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

@@ -1,12 +1,27 @@
 package com.rinas.revenue.domain;
 
-import jakarta.persistence.*;
-import java.time.Instant;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
+/**
+ * A sellable item owned by one business. Price is exact decimal money — never a
+ * floating-point type — because rounding errors are unacceptable in a revenue
+ * system.
+ */
 @Entity
-@Table(schema = "app")
+@Table(schema = "app", name = "products")
 public class Product {
 
     @Id
@@ -22,43 +37,34 @@ public class Product {
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal price;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
-    private String status; // ACTIVE, INACTIVE, ARCHIVED
+    private ProductStatus status = ProductStatus.ACTIVE;
 
-    @Column(columnDefinition = "UUID")
-    private UUID businessId;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "business_id", nullable = false)
+    private Business business;
 
-    @Column(nullable = false)
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Column(nullable = false)
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    // Default constructor for JPA
-    public Product() {
-        this.id = UUID.randomUUID();
-        this.price = BigDecimal.ZERO;
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
-        this.status = "ACTIVE";
+    protected Product() {
     }
 
-    public Product(String name, BigDecimal price, UUID businessId) {
+    public Product(String name, BigDecimal price, Business business) {
         this.id = UUID.randomUUID();
         this.name = name;
         this.price = price;
-        this.businessId = businessId;
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
-        this.status = "ACTIVE";
+        this.business = business;
     }
 
     public UUID getId() {
         return id;
-    }
-
-    public void setId(UUID id) {
-        this.id = id;
     }
 
     public String getName() {
@@ -85,35 +91,31 @@ public class Product {
         this.price = price;
     }
 
-    public String getStatus() {
+    public ProductStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(ProductStatus status) {
         this.status = status;
     }
 
-    public UUID getBusinessId() {
-        return businessId;
+    public Business getBusiness() {
+        return business;
     }
 
-    public void setBusinessId(UUID businessId) {
-        this.businessId = businessId;
+    public void setBusiness(Business business) {
+        this.business = business;
+    }
+
+    public UUID getBusinessId() {
+        return business == null ? null : business.getId();
     }
 
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

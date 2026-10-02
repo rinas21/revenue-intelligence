@@ -1,11 +1,25 @@
 package com.rinas.revenue.domain;
 
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
+/**
+ * Root tenancy unit. Every business-owned row carries this business's id in its
+ * {@code business_id} column, and the application scopes all reads and writes by
+ * it. See {@code ADR-tenant-isolation.md}.
+ *
+ * <p>{@code parentBusinessId} is an optional self-reference for a future
+ * organization hierarchy; a NULL value is a root business. It is not used for
+ * access control today.
+ */
 @Entity
-@Table(schema = "app")
+@Table(schema = "app", name = "businesses")
 public class Business {
 
     @Id
@@ -15,36 +29,27 @@ public class Business {
     @Column(nullable = false, length = 255)
     private String name;
 
-    @Column(columnDefinition = "UUID")
-    private UUID businessId;
+    @Column(name = "business_id", columnDefinition = "UUID")
+    private UUID parentBusinessId;
 
-    @Column(nullable = false)
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Column(nullable = false)
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    // Default constructor for JPA
-    public Business() {
-        this.id = UUID.randomUUID();
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
+    protected Business() {
     }
 
-    public Business(String name, UUID businessId) {
+    public Business(String name) {
         this.id = UUID.randomUUID();
         this.name = name;
-        this.businessId = businessId;
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
     }
 
     public UUID getId() {
         return id;
-    }
-
-    public void setId(UUID id) {
-        this.id = id;
     }
 
     public String getName() {
@@ -55,27 +60,19 @@ public class Business {
         this.name = name;
     }
 
-    public UUID getBusinessId() {
-        return businessId;
+    public UUID getParentBusinessId() {
+        return parentBusinessId;
     }
 
-    public void setBusinessId(UUID businessId) {
-        this.businessId = businessId;
+    public void setParentBusinessId(UUID parentBusinessId) {
+        this.parentBusinessId = parentBusinessId;
     }
 
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

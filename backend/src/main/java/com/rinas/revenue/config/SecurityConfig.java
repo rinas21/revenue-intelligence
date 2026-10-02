@@ -1,55 +1,44 @@
 package com.rinas.revenue.config;
 
 import com.rinas.revenue.common.error.ApiErrorSecurityHandler;
+import com.rinas.revenue.security.JwtAuthenticationFilter;
+import com.rinas.revenue.security.RateLimitFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * Explicit development security configuration.
+ * Security configuration.
  *
- * <p>The reasoning here matters, because the default is the problem.
- * {@code spring-boot-starter-security} is on the classpath, and without a
- * {@link org.springframework.security.web.SecurityFilterChain} bean Spring
- * Security would install its own default chain: form login plus HTTP Basic
- * backed by a randomly generated password printed to the log. That is the worst
- * of both outcomes — every API call returns 401 with a credential nobody chose,
- * and the security posture of the application is decided by a default rather
- * than by a decision.
+ * <p>The API is stateless and authenticated with short-lived bearer tokens.
+ * Because there is no session cookie, CSRF protection is not meaningful for the
+ * API and is disabled; a token must be presented explicitly on every request.
  *
- * <p>So Phase 1 states the posture out loud instead:
+ * <p>Authorization is deliberately coarse here: authentication endpoints and
+ * operational endpoints are public, and everything else requires a valid token.
+ * It is intentionally <em>not</em> expressed as per-endpoint rules, because the
+ * real isolation boundary is the {@code business_id} carried by the token and
+ * enforced in the service layer. A rule that says "this path needs ADMIN" does
+ * not stop an ADMIN of Business A reading Business B; the business scope does.
  *
- * <ul>
- *   <li>Form login, HTTP Basic and logout are switched <em>off</em> explicitly.
- *       There is no user store yet, so there is no way to authenticate, and a
- *       generated credential would only hide that.</li>
- *   <li>{@code UserDetailsServiceAutoConfiguration} is excluded in
- *       {@code application.yaml}, which is what actually stops the generated
- *       password from being created.</li>
- *   <li>Sessions are stateless and CSRF protection is disabled. This is sound
- *       only because the API is stateless and unauthenticated: there is no
- *       session cookie for a cross-site request to ride on. Phase 14 revisits
- *       this — if authentication ends up using a cookie rather than a bearer
- *       token, CSRF protection must be turned back on.</li>
- *   <li>{@code /api/**} is permitted so the frontend can be developed against a
- *       real backend. Everything not explicitly listed is denied, so a new
- *       endpoint is unreachable until it is deliberately allowed.</li>
- * </ul>
- *
- * <p>Business isolation is not implemented here. It belongs with the domain
- * model in Phase 2 and is completed in Phase 14; this configuration is only the
- * foundation that makes the development loop possible.
+ * <p>Rejections produced by the filter chain never reach
+ * {@code GlobalExceptionHandler}, so {@link ApiErrorSecurityHandler} renders
+ * them in the same {@code ApiError} shape as every other failure.
  */
 @Configuration
 @EnableWebSecurity
 class SecurityConfig {
 
-    /** Endpoints that must work before authentication exists. */
     private static final String[] PUBLIC_ENDPOINTS = {
-        "/api/**",
+        "/api/v1/auth/**",
         "/actuator/health",
         "/actuator/health/**",
         "/actuator/info",
@@ -60,23 +49,35 @@ class SecurityConfig {
     };
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, ApiErrorSecurityHandler securityErrorHandler)
-            throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, ApiErrorSecurityHandler securityErrorHandler,
+            JwtAuthenticationFilter jwtAuthenticationFilter, RateLimitFilter rateLimitFilter) throws Exception {
         return http
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .formLogin(form -> form.disable())
             .httpBasic(basic -> basic.disable())
             .logout(logout -> logout.disable())
-            // Rejections made here never reach GlobalExceptionHandler, so they get
-            // their own writer. Without this a denied request would answer with an
-            // empty body while every other failure returns ApiError.
             .exceptionHandling(exceptions -> exceptions
                 .accessDeniedHandler(securityErrorHandler)
                 .authenticationEntryPoint(securityErrorHandler))
             .authorizeHttpRequests(requests -> requests
                 .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
-                .anyRequest().denyAll())
+                .anyRequest().authenticated())
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(rateLimitFilter, JwtAuthenticationFilter.class)
             .build();
+    }
+
+    @Bean
+    PasswordEncoder passwordEncoder() {
+        // Cost 10 is the Spring default and remains an acceptable balance for a
+        // local-first application; it is stored in the hash so it can be raised
+        // later without invalidating existing passwords.
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
+        return configuration.getAuthenticationManager();
     }
 }

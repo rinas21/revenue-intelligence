@@ -159,6 +159,20 @@ class GlobalExceptionHandler {
             request, List.of());
     }
 
+    // --- 4xx domain failures ------------------------------------------------
+
+    /**
+     * Every deliberate domain failure carries its own HTTP status and stable
+     * code, so it is translated here in one place rather than by a handler per
+     * subclass. This is where later phases plug in without introducing a second
+     * error format.
+     */
+    @ExceptionHandler(com.rinas.revenue.common.exception.AppException.class)
+    ResponseEntity<ApiError> handleAppException(com.rinas.revenue.common.exception.AppException ex,
+            HttpServletRequest request) {
+        return response(ex.getStatus(), ex.getCode(), ex.getMessage(), request, List.of());
+    }
+
     // --- 500 ----------------------------------------------------------------
 
     /**

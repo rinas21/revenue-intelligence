@@ -1,62 +1,67 @@
 package com.rinas.revenue.service;
 
+import com.rinas.revenue.common.exception.ConflictException;
+import com.rinas.revenue.common.exception.ForbiddenOperationException;
+import com.rinas.revenue.common.exception.ResourceNotFoundException;
+import com.rinas.revenue.domain.Role;
 import com.rinas.revenue.domain.User;
+import com.rinas.revenue.dto.user.UserResponse;
 import com.rinas.revenue.repository.UserRepository;
-import org.springframework.stereotype.Service;
-import java.util.UUID;
-import org.springframework.transaction.annotation.Transactional;
+import com.rinas.revenue.security.SecurityUtils;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+/** User management within a single business. */
 @Service
 public class UserService {
 
     private final UserRepository userRepository;
+    private final BusinessService businessService;
+    private final PasswordEncoder passwordEncoder;
 
-    public UserService(UserRepository userRepository) {
+    public UserService(UserRepository userRepository, BusinessService businessService, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.businessService = businessService;
+        this.passwordEncoder = passwordEncoder;
+    }
+
+    @Transactional(readOnly = true)
+    public List<UserResponse> list(UUID businessId) {
+        return userRepository.findAllByBusinessId(businessId).stream().map(UserResponse::from).toList();
     }
 
     @Transactional
-    public User create(String username, String email, String passwordHash, UUID businessId, String role) {
-        User user = new User(username, email, passwordHash, businessId, role);
-        return userRepository.save(user);
-    }
-
-    @Transactional
-    public User updatePassword(UUID id, String newPasswordHash) {
-        Optional<User> optional = userRepository.findById(id);
-        if (optional.isPresent()) {
-            User user = optional.get();
-            user.setPasswordHash(newPasswordHash);
-            user.setUpdatedAt(java.time.Instant.now());
-            return userRepository.save(user);
+    public UserResponse create(UUID businessId, UserResponse.CreateRequest request) {
+        // Only an OWNER may create another OWNER. An ADMIN can staff the
+        // business but cannot mint a peer that could later remove them.
+        if (request.role() == Role.OWNER && !SecurityUtils.requirePrincipal().hasRole(Role.OWNER)) {
+            throw new ForbiddenOperationException("Only an OWNER can create another OWNER");
         }
-        return null;
+        if (userRepository.existsByUsername(request.username())) {
+            throw ConflictException.duplicate("Username '" + request.username() + "'");
+        }
+        if (userRepository.existsByEmail(request.email())) {
+            throw ConflictException.duplicate("Email '" + request.email() + "'");
+        }
+        User user = new User(
+            request.username(),
+            request.email(),
+            passwordEncoder.encode(request.password()),
+            businessService.requireBusiness(businessId),
+            request.role());
+        return UserResponse.from(userRepository.save(user));
     }
 
-    public Optional<User> findById(UUID id) {
-        return userRepository.findById(id);
-    }
-
-    public Optional<User> findByUsername(String username) {
-        return userRepository.findByUsername(username);
-    }
-
-    public Optional<User> findByEmail(String email) {
-        return userRepository.findByEmail(email);
-    }
-
-    public Optional<User> findByBusinessIdAndRole(UUID businessId, String role) {
-        return userRepository.findByBusinessIdAndRole(businessId, role);
-    }
-
-    public List<User> listAllByBusinessId(UUID businessId) {
-        // JpaRepository doesn't have this directly; use a query or fetch all and filter
-        // For now, fetch all and filter in Java
-        return userRepository.findAll().stream()
-                .filter(u -> u.getBusinessId().equals(businessId))
-                .toList();
+    @Transactional
+    public void remove(UUID businessId, UUID userId) {
+        User user = userRepository.findByIdAndBusinessId(userId, businessId)
+            .orElseThrow(() -> ResourceNotFoundException.of("User", userId));
+        if (user.getId().equals(SecurityUtils.requirePrincipal().getUserId())) {
+            throw new ForbiddenOperationException("You cannot remove your own account");
+        }
+        userRepository.delete(user);
     }
 }

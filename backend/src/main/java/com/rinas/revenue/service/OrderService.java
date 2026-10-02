@@ -1,104 +1,134 @@
 package com.rinas.revenue.service;
 
+import com.rinas.revenue.common.exception.BusinessRuleException;
+import com.rinas.revenue.common.exception.ResourceNotFoundException;
+import com.rinas.revenue.common.web.PageResponse;
+import com.rinas.revenue.domain.Customer;
 import com.rinas.revenue.domain.Order;
-import com.rinas.revenue.domain.OrderItem;
-import com.rinas.revenue.dto.SaleRecordDTO;
-import com.rinas.revenue.repository.OrderItemRepository;
+import com.rinas.revenue.domain.OrderStatus;
+import com.rinas.revenue.domain.Product;
+import com.rinas.revenue.domain.ProductStatus;
+import com.rinas.revenue.dto.order.OrderRequest;
+import com.rinas.revenue.dto.order.OrderResponse;
+import com.rinas.revenue.dto.order.OrderSummaryResponse;
+import com.rinas.revenue.event.OrderCancelledEvent;
+import com.rinas.revenue.event.OrderCreatedEvent;
+import com.rinas.revenue.event.OutboxService;
 import com.rinas.revenue.repository.OrderRepository;
-import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.common.serialization.StringSerializer;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.SendResult;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.math.BigDecimal;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
+/**
+ * Recording and reading sales.
+ *
+ * <p>The whole creation flow is one database transaction: the order, its items
+ * and the outbox row commit together. Nothing is published to Kafka here — the
+ * outbox publisher does that after the commit, so a broker outage can never
+ * leave an order recorded with no event, or an event with no order.
+ */
 @Service
 public class OrderService {
 
     private final OrderRepository orderRepository;
-    private final OrderItemRepository orderItemRepository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final ProductService productService;
+    private final CustomerService customerService;
+    private final BusinessService businessService;
+    private final OutboxService outboxService;
 
-    public OrderService(OrderRepository orderRepository, OrderItemRepository orderItemRepository,
-                        KafkaTemplate<String, String> kafkaTemplate) {
+    public OrderService(OrderRepository orderRepository, ProductService productService,
+            CustomerService customerService, BusinessService businessService, OutboxService outboxService) {
         this.orderRepository = orderRepository;
-        this.orderItemRepository = orderItemRepository;
-        this.kafkaTemplate = kafkaTemplate;
+        this.productService = productService;
+        this.customerService = customerService;
+        this.businessService = businessService;
+        this.outboxService = outboxService;
     }
 
     @Transactional
-    public Order createOrder(UUID businessId, UUID customerId) {
-        Order order = new Order(businessId, customerId);
-        return orderRepository.save(order);
+    public OrderResponse create(UUID businessId, OrderRequest request) {
+        // Idempotency: a retried request carrying the same externalRef returns
+        // the original order instead of recording a second sale.
+        if (request.externalRef() != null && !request.externalRef().isBlank()) {
+            var existing = orderRepository.findByBusinessIdAndExternalRef(businessId, request.externalRef());
+            if (existing.isPresent()) {
+                return OrderResponse.from(existing.get());
+            }
+        }
+
+        Customer customer = request.customerId() == null
+            ? null
+            : customerService.requireCustomer(businessId, request.customerId());
+
+        Order order = new Order(businessService.requireBusiness(businessId), customer, request.orderDate());
+        order.setSource(request.source() == null ? "MANUAL" : request.source());
+        order.setExternalRef(request.externalRef());
+        if (request.discountAmount() != null) {
+            order.setDiscountAmount(request.discountAmount());
+        }
+
+        for (OrderRequest.OrderItemRequest line : request.items()) {
+            Product product = productService.requireProduct(businessId, line.productId());
+            if (product.getStatus() == ProductStatus.ARCHIVED) {
+                throw new BusinessRuleException("Product '" + product.getName() + "' is archived and cannot be sold");
+            }
+            BigDecimal unitPrice = line.unitPrice() == null ? product.getPrice() : line.unitPrice();
+            order.addItem(product, line.quantity(), unitPrice, line.discountAmount());
+        }
+
+        order.recalculateTotals();
+        if (order.getTotalAmount().compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessRuleException("Order total cannot be negative after discounts");
+        }
+
+        Order saved = orderRepository.save(order);
+
+        List<OrderCreatedEvent.Item> items = saved.getItems().stream()
+            .map(item -> new OrderCreatedEvent.Item(
+                item.getProductId(), item.getQuantity(), item.getUnitPrice(),
+                item.getDiscountAmount(), item.getLineTotal()))
+            .toList();
+
+        outboxService.append(OutboxService.AGGREGATE_ORDER, saved.getId(), "OrderCreated",
+            OutboxService.orderCreated(saved.getId(), businessId,
+                customer == null ? null : customer.getId(), saved.getOrderDate(), saved.getStatus().name(),
+                saved.getSubtotal(), saved.getDiscountAmount(), saved.getTotalAmount(), items));
+
+        return OrderResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<OrderSummaryResponse> list(UUID businessId, OrderStatus status, Pageable pageable) {
+        var page = status == null
+            ? orderRepository.findAllByBusinessId(businessId, pageable)
+            : orderRepository.findAllByBusinessIdAndStatus(businessId, status, pageable);
+        return PageResponse.from(page, OrderSummaryResponse::from);
+    }
+
+    @Transactional(readOnly = true)
+    public OrderResponse get(UUID businessId, UUID orderId) {
+        return OrderResponse.from(requireOrder(businessId, orderId));
     }
 
     @Transactional
-    public OrderItem addOrderItem(UUID orderId, UUID productId, Integer quantity, java.math.BigDecimal unitPrice, java.math.BigDecimal discountAmount) {
-        if (quantity == null || quantity <= 0) {
-            throw new IllegalArgumentException("Quantity must be greater than zero");
-        }
-        if (unitPrice == null || unitPrice.compareTo(java.math.BigDecimal.ZERO) < 0) {
-            throw new IllegalArgumentException("Unit price must be >= zero");
-        }
-        if (discountAmount == null || discountAmount.compareTo(java.math.BigDecimal.ZERO) < 0) {
-            throw new IllegalArgumentException("Discount must be >= zero");
-        }
-
-        OrderItem item = new OrderItem(orderId, productId);
-        item.setQuantity(quantity);
-        item.setUnitPrice(unitPrice);
-        item.setDiscountAmount(discountAmount);
-
-        BigDecimal lineTotal = unitPrice.multiply(java.math.BigDecimal.valueOf(quantity)).subtract(discountAmount);
-        item.setLineTotal(lineTotal);
-
-        OrderItem savedItem = orderItemRepository.save(item);
-        
-        // Publish OrderCreated event after the order item is saved
-        publishOrderCreatedEvent(orderId, item.getProductId(), quantity, unitPrice, discountAmount);
-
-        return savedItem;
-    }
-
-    public List<Order> listByBusinessId(UUID businessId) {
-        return orderRepository.findByBusinessIdOrderByOrderDateDesc(businessId);
-    }
-
-    public Optional<Order> findById(UUID id) {
-        return orderRepository.findByIdAndBusinessId(id, null);
-    }
-
-    @Transactional
-    public void deleteOrder(UUID id) {
-        orderRepository.deleteById(id);
-    }
-
-    private void publishOrderCreatedEvent(UUID orderId, UUID productId, Integer quantity, java.math.BigDecimal unitPrice, java.math.BigDecimal discountAmount) {
-        if (kafkaTemplate == null) {
+    public void cancel(UUID businessId, UUID orderId, String reason) {
+        Order order = requireOrder(businessId, orderId);
+        if (order.getStatus() == OrderStatus.CANCELLED) {
             return;
         }
-        
-        String topic = "revenue.order-created";
-        String key = orderId.toString();
-        
-        String value = String.format(
-            "{\"orderId\":\"%s\",\"productId\":\"%s\",\"quantity\":%d,\"unitPrice\":%d,\"discountAmount\":%d}",
-            orderId, productId, quantity, unitPrice, discountAmount
-        );
-        
-        // Use ProducerRecord for explicit control
-        org.apache.kafka.clients.producer.ProducerRecord<String, String> record =
-            new org.apache.kafka.clients.producer.ProducerRecord<>(topic, key, value);
-        
-        kafkaTemplate.send(record).whenComplete((result, ex) -> {
-            if (ex != null) {
-                System.err.println("Failed to send Kafka event: " + ex.getMessage());
-            }
-        });
+        order.setStatus(OrderStatus.CANCELLED);
+        orderRepository.save(order);
+        outboxService.append(OutboxService.AGGREGATE_ORDER, order.getId(), "OrderCancelled",
+            new OrderCancelledEvent(UUID.randomUUID(), order.getId(), businessId, Instant.now(), reason));
+    }
+
+    @Transactional(readOnly = true)
+    public Order requireOrder(UUID businessId, UUID orderId) {
+        return orderRepository.findByIdAndBusinessId(orderId, businessId)
+            .orElseThrow(() -> ResourceNotFoundException.of("Order", orderId));
     }
 }

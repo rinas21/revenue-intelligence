@@ -1,22 +1,35 @@
 package com.rinas.revenue.repository;
 
 import com.rinas.revenue.domain.Order;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.stereotype.Repository;
+import com.rinas.revenue.domain.OrderStatus;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaRepository;
 
-@Repository
 public interface OrderRepository extends JpaRepository<Order, UUID> {
+
+    @EntityGraph(attributePaths = {"customer", "items", "items.product"})
+    Optional<Order> findByIdAndBusinessId(UUID id, UUID businessId);
+
+    @EntityGraph(attributePaths = {"customer"})
+    Page<Order> findAllByBusinessId(UUID businessId, Pageable pageable);
+
+    @EntityGraph(attributePaths = {"customer"})
+    Page<Order> findAllByBusinessIdAndStatus(UUID businessId, OrderStatus status, Pageable pageable);
+
+    Optional<Order> findByBusinessIdAndExternalRef(UUID businessId, String externalRef);
+
+    @EntityGraph(attributePaths = {"customer", "items", "items.product"})
+    List<Order> findAllByBusinessIdAndOrderDateBetween(UUID businessId, Instant from, Instant to);
+
+    long countByBusinessIdAndStatus(UUID businessId, OrderStatus status);
 
     List<Order> findByBusinessIdOrderByOrderDateDesc(UUID businessId);
 
-    List<Order> findByBusinessIdAndStatus(UUID businessId, String status);
-
-    List<Order> findByCustomerIdOrderByOrderDateDesc(UUID customerId);
-
-    Optional<Order> findByBusinessIdAndId(UUID businessId, UUID orderId);
-
-    Optional<Order> findByIdAndBusinessId(UUID orderId, UUID businessId);
+    long countByBusinessId(UUID businessId);
 }

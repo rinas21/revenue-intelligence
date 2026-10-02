@@ -1,134 +1,109 @@
 package com.rinas.revenue.domain;
 
-import jakarta.persistence.*;
-import java.time.Instant;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
+/**
+ * A single line on an {@link Order}. {@code lineTotal} is derived:
+ * {@code quantity * unitPrice - discountAmount}. Unit price is captured at the
+ * time of sale so that later price changes never rewrite historical revenue.
+ */
 @Entity
-@Table(schema = "app")
+@Table(schema = "app", name = "order_items")
 public class OrderItem {
 
     @Id
     @Column(columnDefinition = "UUID")
     private UUID id;
 
-    @Column(columnDefinition = "UUID", nullable = false)
-    private UUID orderId;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "order_id", nullable = false)
+    private Order order;
 
-    @Column(columnDefinition = "UUID", nullable = false)
-    private UUID productId;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "product_id", nullable = false)
+    private Product product;
 
     @Column(nullable = false)
     private Integer quantity;
 
-    @Column(nullable = false, precision = 19, scale = 4)
+    @Column(name = "unit_price", nullable = false, precision = 19, scale = 4)
     private BigDecimal unitPrice;
 
-    @Column(nullable = false, precision = 19, scale = 4)
-    private BigDecimal discountAmount;
+    @Column(name = "discount_amount", nullable = false, precision = 19, scale = 4)
+    private BigDecimal discountAmount = BigDecimal.ZERO;
 
-    @Column(nullable = false, precision = 19, scale = 4)
+    @Column(name = "line_total", nullable = false, precision = 19, scale = 4)
     private BigDecimal lineTotal;
 
-    @Column(nullable = false)
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    @Column(nullable = false)
+    @UpdateTimestamp
+    @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    // Default constructor for JPA
-    public OrderItem() {
-        this.id = UUID.randomUUID();
-        this.quantity = 1;
-        this.unitPrice = BigDecimal.ZERO;
-        this.discountAmount = BigDecimal.ZERO;
-        this.lineTotal = BigDecimal.ZERO;
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
+    protected OrderItem() {
     }
 
-    public OrderItem(UUID orderId, UUID productId) {
+    OrderItem(Order order, Product product, int quantity, BigDecimal unitPrice, BigDecimal discountAmount) {
         this.id = UUID.randomUUID();
-        this.orderId = orderId;
-        this.productId = productId;
-        this.quantity = 1;
-        this.unitPrice = BigDecimal.ZERO;
-        this.discountAmount = BigDecimal.ZERO;
-        this.lineTotal = BigDecimal.ZERO;
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
+        this.order = order;
+        this.product = product;
+        this.quantity = quantity;
+        this.unitPrice = unitPrice;
+        this.discountAmount = discountAmount;
+        this.lineTotal = unitPrice.multiply(BigDecimal.valueOf(quantity)).subtract(discountAmount);
     }
 
     public UUID getId() {
         return id;
     }
 
-    public void setId(UUID id) {
-        this.id = id;
+    public Order getOrder() {
+        return order;
     }
 
-    public UUID getOrderId() {
-        return orderId;
-    }
-
-    public void setOrderId(UUID orderId) {
-        this.orderId = orderId;
+    public Product getProduct() {
+        return product;
     }
 
     public UUID getProductId() {
-        return productId;
-    }
-
-    public void setProductId(UUID productId) {
-        this.productId = productId;
+        return product == null ? null : product.getId();
     }
 
     public Integer getQuantity() {
         return quantity;
     }
 
-    public void setQuantity(Integer quantity) {
-        this.quantity = quantity;
-    }
-
     public BigDecimal getUnitPrice() {
         return unitPrice;
-    }
-
-    public void setUnitPrice(BigDecimal unitPrice) {
-        this.unitPrice = unitPrice;
     }
 
     public BigDecimal getDiscountAmount() {
         return discountAmount;
     }
 
-    public void setDiscountAmount(BigDecimal discountAmount) {
-        this.discountAmount = discountAmount;
-    }
-
     public BigDecimal getLineTotal() {
         return lineTotal;
-    }
-
-    public void setLineTotal(BigDecimal lineTotal) {
-        this.lineTotal = lineTotal;
     }
 
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

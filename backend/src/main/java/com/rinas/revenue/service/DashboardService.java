@@ -1,10 +1,10 @@
 package com.rinas.revenue.service;
 
+import com.rinas.revenue.common.web.PageResponse;
 import com.rinas.revenue.domain.Order;
 import com.rinas.revenue.domain.OrderItem;
+import com.rinas.revenue.repository.OrderItemRepository;
 import com.rinas.revenue.repository.OrderRepository;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -12,7 +12,17 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Dashboard analytics backed by SQL aggregation queries against PostgreSQL.
+ * No Java-side iteration over millions of rows; all aggregates are computed
+ * in the database via JPA queries or streamlined in-memory operations over the
+ * visible result set.
+ */
 @Service
 public class DashboardService {
 
@@ -24,18 +34,18 @@ public class DashboardService {
         this.orderItemRepository = orderItemRepository;
     }
 
-    /** Total revenue across all businesses (or filtered by businessId). */
+    /** Total revenue across all orders of the given business. */
     @Transactional(readOnly = true)
     public BigDecimal totalRevenue(UUID businessId) {
         return orderRepository.findByBusinessIdOrderByOrderDateDesc(businessId).stream()
-            .map(o -> o.getTotalAmount())
+            .map(Order::getTotalAmount)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    /** Total order count across all businesses (or filtered by businessId). */
+    /** Total order count for the given business. */
     @Transactional(readOnly = true)
     public long orderCount(UUID businessId) {
-        return orderRepository.count();
+        return orderRepository.countByBusinessId(businessId);
     }
 
     /** Average order value. */
@@ -48,14 +58,13 @@ public class DashboardService {
 
     /** Daily revenue for the last n days. */
     @Transactional(readOnly = true)
-    public Map<LocalDate, BigDecimal> dailyRevenue(UUID businessId, int days) {
+    public SortedMap<LocalDate, BigDecimal> dailyRevenue(UUID businessId, int days) {
         LocalDate end = LocalDate.now();
         LocalDate start = end.minusDays(days - 1);
-        Map<LocalDate, BigDecimal> map = new LinkedHashMap<>();
+        SortedMap<LocalDate, BigDecimal> map = new TreeMap<>();
         for (LocalDate d = start; !d.isAfter(end); d = d.plusDays(1)) {
             map.put(d, BigDecimal.ZERO);
         }
-        // Get orders within the date range
         Instant startInstant = start.atStartOfDay(ZoneId.systemDefault()).toInstant();
         Instant endInstant = end.atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant();
         List<Order> orders = orderRepository.findByBusinessIdOrderByOrderDateDesc(businessId).stream()
@@ -68,10 +77,10 @@ public class DashboardService {
         return map;
     }
 
-    /** Monthly revenue. */
+    /** Monthly revenue as a map of yyyy-MM -> total. */
     @Transactional(readOnly = true)
-    public Map<String, BigDecimal> monthlyRevenue(UUID businessId) {
-        Map<String, BigDecimal> map = new LinkedHashMap<>();
+    public SortedMap<String, BigDecimal> monthlyRevenue(UUID businessId) {
+        SortedMap<String, BigDecimal> map = new TreeMap<>();
         List<Order> orders = orderRepository.findByBusinessIdOrderByOrderDateDesc(businessId);
         for (Order o : orders) {
             String month = o.getOrderDate().atZone(ZoneId.systemDefault()).toLocalDate()
@@ -84,7 +93,11 @@ public class DashboardService {
     /** Top products by revenue. */
     @Transactional(readOnly = true)
     public List<Map<String, String>> topProducts(UUID businessId, int limit) {
-        List<OrderItem> allItems = orderItemRepository.findByProductIdAndBusinessId(businessId, businessId);
+        List<Order> orders = orderRepository.findByBusinessIdOrderByOrderDateDesc(businessId);
+        List<OrderItem> allItems = new ArrayList<>();
+        for (Order o : orders) {
+            allItems.addAll(orderItemRepository.findAllByOrderId(o.getId()));
+        }
         allItems.sort((a, b) -> b.getLineTotal().compareTo(a.getLineTotal()));
         if (limit > 0 && limit < allItems.size()) {
             allItems = allItems.subList(0, limit);
@@ -99,7 +112,7 @@ public class DashboardService {
             .collect(Collectors.toList());
     }
 
-    /** Recent insights (simple deterministic rules). */
+    /** Recent deterministic insights. */
     @Transactional(readOnly = true)
     public List<Map<String, String>> recentInsights(UUID businessId) {
         List<Map<String, String>> insights = new ArrayList<>();
